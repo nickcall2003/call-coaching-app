@@ -372,7 +372,8 @@ def join_complete(body: JoinIn, req: Request, resp: Response, s: DB = Depends(db
         raise HTTPException(400, "Use at least 10 characters for your password.")
     d = dict(c.data or {})
     if not d.get("health"):
-        if not body.health or not body.agreed:
+        required = ("doctor", "symptoms", "injury", "scan")
+        if not body.agreed or not body.health or any(body.health.get(k) not in ("yes", "no") for k in required):
             raise HTTPException(400, "Answer each question and accept the agreement to continue.")
         d["health"] = {k: str(v)[:10] for k, v in body.health.items()}
         d["agreed_at"] = now().isoformat()
