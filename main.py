@@ -223,8 +223,31 @@ def file_json(x: FileRow, with_client=False):
     return out
 
 
+DEFAULT_WAIVER = """TRAINING AGREEMENT AND RELEASE OF LIABILITY
+Call Coaching & Performance and Nicholas Call ("Nick")
+
+Please read this carefully. It limits your right to bring a claim if you are hurt.
+
+1. Risks of exercise. Exercise, personal training, cardio, mobility work and nutrition changes carry risks, including muscle and joint injuries, illness, heart problems, and in rare cases serious injury or death. You choose to take part and you accept these risks.
+
+2. Your health. You confirm your health answers are true. You will tell Nick about any injury, condition or medication that may affect your training, and update him if anything changes. You should check with your doctor before starting or changing an exercise or nutrition program. Stop and tell Nick if you feel pain, dizziness or anything unusual.
+
+3. Not medical care. Coaching, workouts and nutrition plans are general fitness guidance. They are not medical advice, diagnosis, treatment or physical therapy.
+
+4. Training at Crunch. In-person training takes place at Crunch Fitness Cordova. You must keep an active Crunch membership and follow Crunch's rules. Your Crunch membership agreement and waiver still apply to your use of the gym. This agreement is separate and also applies to your coaching with Nick.
+
+5. Online training. If you train online, you choose where, when and with what equipment you train, and you are responsible for keeping your setup and training safe.
+
+6. Release of liability. To the fullest extent Tennessee law allows, you release Call Coaching & Performance and Nicholas Call from claims for injury, illness, death or property damage connected to your coaching, workouts or nutrition plan, including claims based on ordinary negligence. This release does not cover gross negligence, reckless or intentional conduct, or anything else the law does not allow to be released.
+
+7. Your agreement. You confirm you are at least 18 years old, that you have read and understand this agreement, and that you are accepting it voluntarily. Tennessee law applies."""
+
+
 def public_settings(s: DB):
-    return get_setting(s, "app", {"venmo": "NickCall2003", "cashapp": "determlned", "apple": "9013590305", "phone": "9013590305", "location": "Crunch Fitness Cordova", "waiver": ""})
+    out = {"venmo": "NickCall2003", "cashapp": "determlned", "apple": "9013590305", "phone": "9013590305", "location": "Crunch Fitness Cordova", "waiver": DEFAULT_WAIVER}
+    out.update(get_setting(s, "app", {}) or {})
+    out["waiver"] = out.get("waiver") or DEFAULT_WAIVER
+    return out
 
 
 # ---------- pages ----------
@@ -348,6 +371,7 @@ def join_complete(body: JoinIn, req: Request, resp: Response, s: DB = Depends(db
             raise HTTPException(400, "Answer each question and accept the agreement to continue.")
         d["health"] = {k: str(v)[:10] for k, v in body.health.items()}
         d["agreed_at"] = now().isoformat()
+        d["agreed_text"] = public_settings(s)["waiver"]
     c.data = d
     flag_modified(c, "data")
     c.password_hash, c.code, c.code_tries = hash_pw(body.password), None, 0

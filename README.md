@@ -17,5 +17,5 @@ Client portal and coach admin for Call Coaching & Performance. FastAPI + Postgre
 
 1. Open the site, tap Coach login, and sign in with `ADMIN_PASSWORD`.
 2. Go to Money, then Payment usernames and settings, and check your Venmo, Cash App, and Apple Cash details.
-3. Paste your lawyer-approved waiver into Settings before inviting real clients.
+3. Review the training agreement in Settings before inviting real clients.
 4. Tap + Client, build the folder, and text the sign-up code.
