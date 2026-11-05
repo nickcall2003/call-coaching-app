@@ -270,6 +270,11 @@ def logo():
     return FileResponse(HERE / "logo.png", media_type="image/png")
 
 
+@app.get("/link-preview.jpg")
+def link_preview():
+    return FileResponse(HERE / "link-preview.jpg", media_type="image/jpeg")
+
+
 @app.get("/manifest.webmanifest")
 def manifest():
     return JSONResponse({"name": "Call Coaching", "short_name": "Call", "start_url": "/", "display": "standalone", "background_color": "#0a0e14", "theme_color": "#0a0e14", "icons": [{"src": "/logo.png", "sizes": "192x192", "type": "image/png"}]})
