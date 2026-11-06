@@ -469,7 +469,7 @@ def admin_state(_=Depends(need_admin), s: DB = Depends(db)):
     }
 
 
-ADMIN_KEYS = {"format", "goal", "why", "program", "start_w", "goal_w", "amount", "due", "due_label", "current_paid", "plan", "nutrition", "notes", "note"}
+ADMIN_KEYS = {"format", "goal", "why", "program", "start_w", "goal_w", "amount", "due", "due_label", "current_paid", "plan", "nutrition", "notes", "note", "scans", "weights"}
 
 
 def apply_phone(s: DB, c: Client, raw: str):
