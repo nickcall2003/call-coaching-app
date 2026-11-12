@@ -399,12 +399,8 @@ def join_complete(body: JoinIn, req: Request, resp: Response, s: DB = Depends(db
         raise HTTPException(400, "Use at least 10 characters for your password.")
     d = dict(c.data or {})
     if not d.get("health"):
-        required = ("doctor", "symptoms", "injury", "scan")
-        if not body.agreed or not body.health or any(body.health.get(k) not in ("yes", "no") for k in required):
-            raise HTTPException(400, "Answer each question and accept the agreement to continue.")
-        d["health"] = {k: str(v)[:10] for k, v in body.health.items()}
-        d["agreed_at"] = now().isoformat()
-        d["agreed_text"] = public_settings(s)["waiver"]
+        apply_health(s, d, body.health, body.agreed)
+    d.pop("temp_pw", None)
     c.data = d
     flag_modified(c, "data")
     c.password_hash, c.code, c.code_tries = hash_pw(body.password), None, 0
@@ -413,10 +409,23 @@ def join_complete(body: JoinIn, req: Request, resp: Response, s: DB = Depends(db
     return {"role": "client"}
 
 
+HEALTH_KEYS = ("doctor", "symptoms", "injury", "scan")
+
+
+def apply_health(s: DB, d: dict, health, agreed):
+    if not agreed or not health or any(health.get(k) not in ("yes", "no") for k in HEALTH_KEYS):
+        raise HTTPException(400, "Answer each question and accept the agreement to continue.")
+    d["health"] = {k: str(v)[:10] for k, v in health.items() if k in HEALTH_KEYS}
+    d["agreed_at"] = now().isoformat()
+    d["agreed_text"] = public_settings(s)["waiver"]
+
+
 # ---------- client ----------
 @app.get("/api/client/state")
 def client_state(c: Client = Depends(need_client), s: DB = Depends(db)):
-    d = {k: v for k, v in (c.data or {}).items() if k not in ("notes", "health")}
+    raw = c.data or {}
+    d = {k: v for k, v in raw.items() if k not in ("notes", "health", "temp_pw")}
+    d["setup"] = {"password": bool(raw.get("temp_pw")), "health": not raw.get("health")}
     return {
         "client": {"id": c.id, "name": c.name, "phone": c.phone, **d},
         "sessions": [sess_json(x) for x in s.query(Sess).filter_by(client_id=c.id).order_by(Sess.date, Sess.minutes)],
@@ -424,6 +433,58 @@ def client_state(c: Client = Depends(need_client), s: DB = Depends(db)):
         "files": [file_json(x) for x in s.query(FileRow).filter_by(client_id=c.id).order_by(FileRow.created.desc())],
         "settings": public_settings(s),
     }
+
+
+class SetupIn(BaseModel):
+    password: str = ""
+    health: Optional[dict] = None
+    agreed: bool = False
+
+
+@app.post("/api/client/setup")
+def client_setup(body: SetupIn, req: Request, resp: Response, c: Client = Depends(need_client), s: DB = Depends(db)):
+    """First sign-in after Nick set a temporary login: pick a real password and confirm health + agreement."""
+    d = dict(c.data or {})
+    if d.get("temp_pw"):
+        if len(body.password) < 10:
+            raise HTTPException(400, "Use at least 10 characters for your new password.")
+        if check_pw(body.password, c.password_hash):
+            raise HTTPException(400, "Pick a new password, not the temporary one.")
+    if not d.get("health"):
+        apply_health(s, d, body.health, body.agreed)
+    if d.get("temp_pw"):
+        c.password_hash = hash_pw(body.password)
+        d.pop("temp_pw", None)
+    c.data = d
+    flag_modified(c, "data")
+    s.commit()
+    set_login(resp, req, {"role": "client", "id": c.id, "v": c.password_hash[-8:]})
+    return {"ok": True}
+
+
+class PwIn(BaseModel):
+    current: str = ""
+    new: str = ""
+
+
+@app.post("/api/client/password")
+def client_password(body: PwIn, req: Request, resp: Response, c: Client = Depends(need_client), s: DB = Depends(db)):
+    key = "pw:" + str(c.id)
+    if too_many(key):
+        raise HTTPException(429, "Too many tries. Wait 15 minutes or text Nick.")
+    if not check_pw(body.current, c.password_hash):
+        failed(key)
+        raise HTTPException(400, "Your current password isn't right.")
+    if len(body.new) < 10:
+        raise HTTPException(400, "Use at least 10 characters for your new password.")
+    c.password_hash = hash_pw(body.new)
+    d = dict(c.data or {})
+    d.pop("temp_pw", None)
+    c.data = d
+    flag_modified(c, "data")
+    s.commit()
+    set_login(resp, req, {"role": "client", "id": c.id, "v": c.password_hash[-8:]})
+    return {"ok": True}
 
 
 class LogIn(BaseModel):
@@ -593,6 +654,24 @@ def edit_client(cid: int, body: dict, _=Depends(need_admin), s: DB = Depends(db)
 
 def _404():
     raise HTTPException(404, "Not found.")
+
+
+@app.post("/api/admin/clients/{cid}/login")
+def admin_set_login(cid: int, body: dict, _=Depends(need_admin), s: DB = Depends(db)):
+    """Nick sets a temporary password. The client picks their own (and confirms health + agreement) on first sign-in."""
+    c = s.get(Client, cid) or _404()
+    if not c.phone:
+        raise HTTPException(400, "Add their phone number first. They sign in with it.")
+    pw = str(body.get("password", "")).strip()
+    if len(pw) < 8:
+        raise HTTPException(400, "Use at least 8 characters for the temporary password.")
+    c.password_hash, c.code, c.code_tries = hash_pw(pw), None, 0
+    d = dict(c.data or {})
+    d["temp_pw"] = True
+    c.data = d
+    flag_modified(c, "data")
+    s.commit()
+    return {"ok": True}
 
 
 @app.delete("/api/admin/clients/{cid}")
