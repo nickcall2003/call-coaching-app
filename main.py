@@ -405,8 +405,38 @@ class LogIn(BaseModel):
     value: object = None
 
 
-@app.post("/api/client/log")
-def client_log(body: LogIn, c: Client = Depends(need_client), s: DB = Depends(db)):
+def _txt(v, n):
+    return str(v if v is not None else "").strip()[:n]
+
+
+def clean_log_value(kind: str, v):
+    """Keep only the fields each kind of entry uses, so a folder can't be stuffed with junk."""
+    if v in (None, False, ""):
+        return None
+    if kind == "workout":
+        if not isinstance(v, dict):
+            return None
+        out = {"w": _txt(v.get("w"), 12), "r": _txt(v.get("r"), 12), "x": _txt(v.get("x"), 80)}
+        if v.get("done"):
+            out["done"] = True
+        out = {k: x for k, x in out.items() if x not in ("", None)}
+        return out if (out.get("w") or out.get("r") or out.get("done")) else None
+    if kind == "complete":
+        if not isinstance(v, dict):
+            return None
+        def n(x):
+            try:
+                return max(0, min(int(x), 999))
+            except (TypeError, ValueError):
+                return 0
+        return {"n": _txt(v.get("n"), 80), "s": n(v.get("s")), "t": n(v.get("t")), "note": _txt(v.get("note"), 600)}
+    return True if v is True else (_txt(v, 40) or None)
+
+
+LOG_FIELDS = {"meal": "meals", "extra": "extras", "workout": "workouts", "complete": "completed"}
+
+
+def apply_log(c: Client, body: LogIn, by: str):
     d = dict(c.data or {})
     if body.type == "weight":
         try:
@@ -416,15 +446,20 @@ def client_log(body: LogIn, c: Client = Depends(need_client), s: DB = Depends(db
         if not 30 <= w <= 800:
             raise HTTPException(400, "Enter your weight in pounds.")
         d["weights"] = [x for x in d.get("weights", []) if x.get("date") != body.key[:10]] + [{"date": body.key[:10], "w": w}]
-    elif body.type in ("meal", "extra", "workout"):
-        field = {"meal": "meals", "extra": "extras", "workout": "workouts"}[body.type]
-        if len(body.key) > 80:
+    elif body.type in LOG_FIELDS:
+        field = LOG_FIELDS[body.type]
+        if not body.key or len(body.key) > 80:
             raise HTTPException(400, "Bad entry.")
         store = dict(d.get(field, {}))
-        if body.value in (None, False, ""):
+        v = clean_log_value(body.type, body.value)
+        if v is None:
             store.pop(body.key, None)
         else:
-            store[body.key] = body.value if not isinstance(body.value, str) else body.value[:40]
+            if body.type == "complete":
+                old = store.get(body.key) or {}
+                v["by"] = by
+                v["at"] = old.get("at") if old.get("by") == by and old.get("at") else datetime.now(timezone.utc).isoformat(timespec="minutes")
+            store[body.key] = v
         d[field] = store
     else:
         raise HTTPException(400, "Unknown entry.")
@@ -432,6 +467,21 @@ def client_log(body: LogIn, c: Client = Depends(need_client), s: DB = Depends(db
         raise HTTPException(400, "This folder is full. Text Nick.")
     c.data = d
     flag_modified(c, "data")
+
+
+@app.post("/api/client/log")
+def client_log(body: LogIn, c: Client = Depends(need_client), s: DB = Depends(db)):
+    apply_log(c, body, "client")
+    s.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/clients/{cid}/log")
+def admin_log(cid: int, body: LogIn, _=Depends(need_admin), s: DB = Depends(db)):
+    c = s.get(Client, cid) or _404()
+    if body.type == "meal":
+        raise HTTPException(400, "Only the client logs meals.")
+    apply_log(c, body, "nick")
     s.commit()
     return {"ok": True}
 
@@ -615,6 +665,25 @@ async def upload(cid: int, file: UploadFile = File(...), _=Depends(need_admin), 
     s.add(FileRow(client_id=cid, name=(file.filename or "file")[:200], mime=ALLOWED[ext], blob=blob))
     s.commit()
     return {"ok": True}
+
+
+@app.post("/api/admin/clients/{cid}/import-plan")
+async def import_plan(cid: int, file: UploadFile = File(...), _=Depends(need_admin), s: DB = Depends(db)):
+    """Read a program .docx and hand back the plan for review. Nothing is saved until Nick taps Save."""
+    s.get(Client, cid) or _404()
+    if Path(file.filename or "").suffix.lower() != ".docx":
+        raise HTTPException(400, "Pick the Word file (.docx) for this client's program.")
+    blob = await file.read(15 * 1024 * 1024 + 1)
+    if len(blob) > 15 * 1024 * 1024:
+        raise HTTPException(400, "Keep files under 15 MB.")
+    from plan_import import parse_docx
+    try:
+        r = parse_docx(blob)
+    except Exception:
+        raise HTTPException(400, "Couldn't read that file. Open it in Word, save it as .docx, and try again.")
+    if not any(d["exercises"] for d in r["plan"]["days"]):
+        raise HTTPException(400, "No workouts found in that file. It needs day lines like \"Monday — Upper Body\".")
+    return r
 
 
 @app.delete("/api/admin/files/{fid}")
