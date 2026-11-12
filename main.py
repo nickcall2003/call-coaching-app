@@ -597,7 +597,7 @@ def get_file(fid: int, me=Depends(current), s: DB = Depends(db)):
 # ---------- admin ----------
 @app.get("/api/admin/state")
 def admin_state(_=Depends(need_admin), s: DB = Depends(db)):
-    clients = [{"id": c.id, "name": c.name, "phone": c.phone, "code": c.code, "has_account": bool(c.password_hash), **(c.data or {})} for c in s.query(Client).order_by(Client.name)]
+    clients = [{"id": c.id, "name": c.name, "phone": c.phone, "code": c.code, "has_account": bool(c.password_hash), "created": (c.created or now()).date().isoformat(), **(c.data or {})} for c in s.query(Client).order_by(Client.name)]
     return {
         "clients": clients,
         "sessions": [sess_json(x, True) for x in s.query(Sess).order_by(Sess.date, Sess.minutes)],
