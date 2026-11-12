@@ -17,6 +17,11 @@ if url.startswith("postgres://"):
     url = url.replace("postgres://", "postgresql+psycopg://", 1)
 elif url.startswith("postgresql://"):
     url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+ON_RAILWAY = any(os.environ.get(k) for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_PROJECT_ID"))
+# On Railway the app must use Postgres. Without it, it would write to a throwaway file that every deploy wipes.
+DB_MISSING = ON_RAILWAY and not url
+if DB_MISSING:
+    print("ERROR: DATABASE_URL is empty. Set it to ${{ Postgres.DATABASE_URL }} on this service. The app is refusing to save anything until then.", flush=True)
 url = url or os.environ.get("LOCAL_DB", "sqlite:///callapp.db")
 engine = create_engine(url, connect_args={"check_same_thread": False} if url.startswith("sqlite") else {}, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -280,9 +285,16 @@ def manifest():
     return JSONResponse({"name": "Call Coaching", "short_name": "Call", "start_url": "/", "display": "standalone", "background_color": "#0a0e14", "theme_color": "#0a0e14", "icons": [{"src": "/logo.png", "sizes": "192x192", "type": "image/png"}]})
 
 
+@app.middleware("http")
+async def block_without_db(request: Request, call_next):
+    if DB_MISSING and request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": "The app isn't connected to its database right now, so nothing was changed. Nick: set DATABASE_URL in Railway."}, status_code=503)
+    return await call_next(request)
+
+
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": not DB_MISSING, "db": "missing" if DB_MISSING else ("postgres" if url.startswith("postgresql") else "sqlite")}
 
 
 # ---------- auth ----------
