@@ -12,7 +12,19 @@ from sqlalchemy.orm import Session as DB, declarative_base, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 HERE = Path(__file__).parent
-url = os.environ.get("DATABASE_URL", "").strip()
+def _db_env():
+    """Find the database address even if the variable name is typed in a different case or uses an older Railway name."""
+    env = {k.upper(): (v or "").strip() for k, v in os.environ.items()}
+    for k in ("DATABASE_URL", "DATABASE_PRIVATE_URL", "DATABASE_PUBLIC_URL", "POSTGRES_URL"):
+        if env.get(k):
+            return env[k]
+    if env.get("PGHOST") and env.get("PGUSER"):
+        return f"postgresql://{env['PGUSER']}:{env.get('PGPASSWORD', '')}@{env['PGHOST']}:{env.get('PGPORT', '5432')}/{env.get('PGDATABASE', 'railway')}"
+    return ""
+
+
+DB_VARS_SEEN = sorted(f"{k}{'' if (v or '').strip() else ' (empty)'}" for k, v in os.environ.items() if re.search(r"database|^pg|postgres", k, re.I))
+url = _db_env()
 if url.startswith("postgres://"):
     url = url.replace("postgres://", "postgresql+psycopg://", 1)
 elif url.startswith("postgresql://"):
@@ -294,7 +306,10 @@ async def block_without_db(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    return {"ok": not DB_MISSING, "db": "missing" if DB_MISSING else ("postgres" if url.startswith("postgresql") else "sqlite")}
+    out = {"ok": not DB_MISSING, "db": "missing" if DB_MISSING else ("postgres" if url.startswith("postgresql") else "sqlite")}
+    if DB_MISSING:
+        out["variables_seen"] = DB_VARS_SEEN
+    return out
 
 
 # ---------- auth ----------
